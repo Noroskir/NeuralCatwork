@@ -79,6 +79,7 @@ class Layer:
         Returns:
             np.array: array of the output layer
         """
+        self.X = x.copy()
         self.Z = np.dot(self.W, x) + self.b
         if self.activation == 'relu':
             A = self._relu(self.Z)
@@ -93,9 +94,9 @@ class Layer:
         Returns:
             np.array: dX
         """
-        m = self.out_shape[1]
+        m = self.dim_out[1]
         if self.activation == 'relu':
-            dZ = dA * self._relu(self.Z)
+            dZ = dA * self._deriv_relu(self.Z)
         elif self.activation == 'sigmoid':
             dZ = dA * self._deriv_sigmoid(self.Z)
         self.dW = 1/m * np.dot(dZ, self.X.T) + self.lamb / m*self.W
