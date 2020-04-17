@@ -1,24 +1,32 @@
 import numpy as np
-import matplotlib.pyplot as plt
 import h5py
+import matplotlib.pyplot as plt
 
 
-class NeuralNetwork:
-    """L-Layer neural network with He initialisation and L2 regularisation."""
+class ConvNeuralNetwork:
+    """Convolutional neural network with He initialisation and L2 regularisation.
+    TODO: - batch normalisation
+          - softmax implementation
+    """
 
-    def __init__(self, dim_layers, activations, lamb=0.0):
+    def __init__(self, input_shape, filters, dim_layers, activations, lamb=0.1):
         """Initialise the neural network.
         Args:
+            input_shape (tuple): m, x, y, c
+            filters (list): list with (f, channels, stride, padding)
             dim_layers (list): list with sizes of the layers
             activations (list): list of strings with activation functions
                                 'relu' or 'lrelu'
             lamb (float): L2 regularisation parameter 0 == no regularisation.
         """
+        self.input_shape
+        self.filt_params = filters
         self.dim_layers = dim_layers
         self.activations = activations
         self.lamb = lamb
         self.N_layers = len(dim_layers)
         self.parameters = {}
+        self.filters = {}
         self.v = {}
         self.s = {}
         self.activ_functions = {"relu": self.relu,
@@ -42,6 +50,22 @@ class NeuralNetwork:
             self.s['dW'+str(l)] = np.zeros(param['W'+str(l)].shape)
             self.s['db'+str(l)] = np.zeros(param['b'+str(l)].shape)
         self.parameters = param
+        filt = {}
+        f_prev = self.input_shape[1]
+        c_prev = self.input_shape[-1]
+        for l in range(1, len(self.filt_parms)):
+            f = self.filt_params[0]
+            c = self.filt_params[1]
+            filt['F'+str(l)] = np.random.randn(f, f, c_prev, c) * \
+                np.sqrt(2/(f_prev**2*c_prev))
+            filt['b'+str(l)] = np.zeros((1, 1, 1, c))
+            self.v['dF'+str(l)] = np.zeros(filt['F'+str(l)].shape)
+            self.v['dfb'+str(l)] = np.zeros(filt['b'+str(l)].shape)
+            self.s['dF'+str(l)] = np.zeros(filt['F'+str(l)].shape)
+            self.s['dfb'+str(l)] = np.zeros(filt['b'+str(l)].shape)
+            f_prev = f
+            c_prev = c
+        self.filters = filt
 
     def relu(self, z):
         """ReLu activation function
@@ -151,6 +175,142 @@ class NeuralNetwork:
 
         return grads
 
+    def conv_forward(self, im, F, b, param):
+        """Cross correlate image with filters.
+        Args:
+            im (np.array): array of images with 3 color channels shape: (m, x, y, c)
+            F (np.array): filter, shape (f, f, n_c_p, n_c)
+            b (np.array): biases, shape (1, 1 ,1, n_c)
+            param (dict): dictionary of {'stride': ..., 'pad': ...}
+        Returns
+            np.array: output of the convolution layer
+            tuple: tuple of (im, F, b, param)
+        """
+        m, n_h_p, n_w_p, n_c_p = im.shape
+        pad = param['pad']
+        stride = param['stride']
+        f = F.shape[0]
+        n_c = F.shape[-1]
+        n_h = int((n_h_p - f + 2*pad)/2) + 1
+        n_w = int((n_w_p - f + 2*pad)/2) + 1
+        Z = np.zeros((m, n_h, n_w, n_c))
+        im_pad = np.pad(im, ((0, 0), (pad, pad), (pad, pad), (0, 0)),
+                        mode='constant', constant_values=(0, 0))
+        for i in range(m):
+            for h in range(n_h):
+                v_s = h*stride
+                v_e = v_s + f
+                for w in range(n_w):
+                    h_s = w*stride
+                    h_e = h_s + f
+                    for c in range(n_c):
+                        Z[i, h, w, c] = np.sum(
+                            im_pad[i, v_s:v_e, h_s:h_e]*F[:, :, :, c]) + b[:, :, :, c]
+
+        cache = (im, F, b, param)
+        return Z, cache
+
+    def conv_backward(self, dZ, cache):
+        """Implementation of backward propagation of a convolution
+        Args:
+            dZ"""
+        (A_p, F, b, param) = cache
+        (m, n_h_p, n_w_p, n_c_p) = A_p.shape
+        (f, f, n_C_prev, n_C) = F.shape
+
+        stride = param["stride"]
+        pad = param["stride"]
+
+        (m, n_h, n_w, n_c) = dZ.shape
+
+        dA_p = np.zeros(A_p.shape)
+        dF = np.zeros(F.shape)
+        db = np.zeros(b.shape)
+
+        A_p_pad = np.pad(A_p, ((0, 0), (pad, pad), (pad, pad),
+                               (0, 0)), mode='constant', constant_values=(0, 0))
+        dA_p_pad = np.pad(dA_p, ((0, 0), (pad, pad), (pad, pad),
+                                 (0, 0)), mode='constant', constant_values=(0, 0))
+        for i in range(m):
+            for h in range(n_h):
+                v_s = h*stride
+                v_e = h*stride + f
+                for w in range(n_w):
+                    h_s = w*stride
+                    h_e = w*stride + f
+                    for c in range(n_c):
+                        dA_p_pad[i, v_s:v_e, h_s:h_e,
+                                 :] += F[:, :, :, c] \
+                            * dZ[i, h, w, c]
+                        dF[:, :, :, c] += A_p_pad[i, v_s:v_e, h_s:h_e] \
+                            * dZ[i, h, w, c]
+                        db[:, :, :, c] += dZ[i, h, w, c]
+            dA_p[i, :, :, :] = dA_p_pad[i, pad:-pad, pad:-pad, :]
+
+        return dA_p, dF, db
+
+    def pool_forward(self, im, param, mode='max'):
+        """Pooling layer with max or average pooling.
+        Args:
+            im (np.array): array of images, shape (m, x, y, c)
+            param (dict): dictionary of {'f': ..., 'stride': ...}
+        Returns:
+            np.array: output of the pooling layer
+            cache
+        """
+        m, n_h_p, n_w_p, n_c = im.shape
+        f = param['f']
+        stride = param['stride']
+
+        n_h = int(1 + (n_h_p - f)/stride)
+        n_w = int(1 + (n_w_p - f)/stride)
+
+        Z = np.zeros((m, n_h, n_w, n_c))
+        for i in range(m):
+            for h in range(n_h):
+                v_s = h*stride
+                v_e = v_s + f
+                for w in range(n_w):
+                    h_s = w*stride
+                    h_e = h_s + f
+                    for c in range(n_c):
+                        if mode == "max":
+                            Z[i, h, w, c] = np.max(im[i, v_s:v_e, h_s:h_e, c])
+                        elif mode == "average":
+                            Z[i, h, w, c] = np.mean(im[i, v_s:v_e, h_s:h_e, c])
+
+        cache = (im, param)
+        return Z, cache
+
+    def pool_backward(self, dA, cache, mode='max'):
+        """Backwards pool"""
+        (A_p, param) = cache
+        stride = param["stride"]
+        f = param['f']
+        m, n_h_p, n_w_p, n_c_p = A_p.shape
+        m, n_h, n_w, n_c = dA.shape
+
+        dA_p = np.zeros(A_p.shape)
+
+        for i in range(m):
+            for h in range(n_h):
+                v_s = h*stride
+                v_e = h*stride+f
+                for w in range(n_w):
+                    h_s = w*stride
+                    h_e = w*stride+f
+                    for c in range(n_c):
+                        if mode == "max":
+                            mask = np.max(
+                                A_p[i, v_s:v_e, h_s:h_e, c]) == A_p[i, v_s:v_e, h_s:h_e, c]
+                            dA_p[i, v_s:v_e, h_s:h_e, c] += mask * \
+                                dA[i, h, w, c]
+                        elif mode == "average":
+                            da = dA[i, h, w, c]
+                            dA_p[i, v_s:v_e, h_s: h_e,
+                                 c] += np.ones((f, f))*da/f**2
+        return dA_p
+
     def update_parameters(self, grads, learning_rate, t, beta1=0.9, beta2=0.999, epsilon=1e-8):
         """Update the network parameters using the gradient descent.
         Args:
@@ -178,6 +338,35 @@ class NeuralNetwork:
             self.parameters["W"+str(l)] -= learning_rate * \
                 vW/(np.sqrt(sW)+epsilon)
             self.parameters["b"+str(l)] -= learning_rate * \
+                vb/(np.sqrt(sb)+epsilon)
+
+    def update_filters(self, grads, learning_rate, t, beta1=0.9, beta2=0.999, epsilon=1e-8):
+        """Update convolution filter parameters with Adam optimisation.
+        Args:
+            grads (dict): dictionary of gradients {'dF1': dF1, 'db1': db1, ...}
+            learning_rate (float): learning_rate
+            t (int): adam counter
+            beta1 (float): first parameter in Adam optimisation
+            beta2 (float): second parameter in Adam optimisation
+        Returns:
+            None.
+        """
+        for l in range(1, len(self.filt_params)):
+            self.v['dF'+str(l)] = beta1*self.v['dF'+str(l)] + \
+                (1-beta1)*grads['dF'+str(l)]
+            self.v['dfb'+str(l)] = beta1*self.v['dfb'+str(l)] + \
+                (1-beta1)*grads['db'+str(l)]
+            self.s['dF'+str(l)] = beta2*self.s['dF'+str(l)] + \
+                (1-beta2)*grads['dF'+str(l)]**2
+            self.s['dfb'+str(l)] = beta2*self.s['dfb'+str(l)] + \
+                (1-beta2)*grads['db'+str(l)]**2
+            vF = self.v['dF'+str(l)] / (1-beta1**t)
+            vb = self.v['dfb'+str(l)] / (1-beta1**t)
+            sF = self.s['dF'+str(l)] / (1-beta2**t)
+            sb = self.s['dfb'+str(l)] / (1-beta2**t)
+            self.filters["F"+str(l)] -= learning_rate * \
+                vF/(np.sqrt(sF)+epsilon)
+            self.filters["b"+str(l)] -= learning_rate * \
                 vb/(np.sqrt(sb)+epsilon)
 
     def train_network(self, X, Y, learning_rate, iterations):
@@ -229,30 +418,3 @@ class NeuralNetwork:
             plt.title("Prediction: " + classes[int(pred[0, index])].decode("utf-8") +
                       " \n Class: " + classes[y[0, index]].decode("utf-8"))
         plt.show()
-
-
-if __name__ == "__main__":
-    with h5py.File("data/train_catvnoncat.h5", "r") as f:
-        X = np.array(f["train_set_x"][:])
-        Y = np.array(f["train_set_y"][:])
-        classes = np.array(f["list_classes"])
-    train_X = X.reshape(X.shape[0], -1).T/225
-    train_Y = Y.reshape(Y.shape[0], -1).T
-    with h5py.File("data/test_catvnoncat.h5", "r") as f:
-        X_test = np.array(f["test_set_x"])
-        Y_test = np.array(f["test_set_y"])
-    X_test_flat = X_test.reshape(X_test.shape[0], -1).T/255
-    Y_test_flat = Y_test.reshape(Y_test.shape[0], -1).T
-
-    # Network architecture
-    layer_dims = (12288, 16, 8, 5, 1)
-    activations = ("relu", "relu", "relu", "sigmoid")
-    nn = NeuralNetwork(layer_dims, activations, lamb=0.1)
-    learning_rate = 0.001
-    iterations = 2000
-    cost = nn.train_network(train_X, train_Y, learning_rate, iterations)
-    pred_train = nn.predict(train_X, train_Y)
-    pred_test = nn.predict(X_test_flat, Y_test_flat)
-    nn.print_misslabeld(X_test_flat, Y_test_flat, pred_test, classes)
-    plt.plot(np.arange(len(cost)), cost)
-    plt.show()
