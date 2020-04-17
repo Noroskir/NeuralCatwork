@@ -17,7 +17,7 @@ class Layer:
         self.X = np.zeros(dim_in)
         self.Z = np.zeros(dim_out)
         self.W = self._init_weights(dim_in[0], dim_out[0])
-        self.b = np.zeros((dim_out, 1))
+        self.b = np.zeros((dim_out[0], 1))
         self.dW = np.zeros(self.W.shape)
         self.db = np.zeros(self.b.shape)
         self.vW = np.zeros(self.W.shape)
