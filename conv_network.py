@@ -191,8 +191,8 @@ class ConvNeuralNetwork:
         stride = param['stride']
         f = F.shape[0]
         n_c = F.shape[-1]
-        n_h = int((n_h_p - f + 2*pad)/2) + 1
-        n_w = int((n_w_p - f + 2*pad)/2) + 1
+        n_h = int((n_h_p - f + 2*pad)/stride) + 1
+        n_w = int((n_w_p - f + 2*pad)/stride) + 1
         Z = np.zeros((m, n_h, n_w, n_c))
         im_pad = np.pad(im, ((0, 0), (pad, pad), (pad, pad), (0, 0)),
                         mode='constant', constant_values=(0, 0))
