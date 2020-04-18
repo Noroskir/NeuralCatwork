@@ -73,6 +73,36 @@ class TestNeuralNetwork(unittest.TestCase):
 
         dA = l2.backward(dA)
         dA = l1.backward(dA)
-        self.assertAlmostEqual(0.41010002, l1.W[0, 0], places=7)
-        self.assertAlmostEqual(0.01005865, l1.W[2, 1], places=7)
-        self.assertAlmostEqual(-0.02835349, l1.b[2, 0], places=7)
+        self.assertAlmostEqual(0.41010002, l1.dW[0, 0], places=7)
+        self.assertAlmostEqual(0.01005865, l1.dW[2, 1], places=7)
+        self.assertAlmostEqual(-0.02835349, l1.db[2, 0], places=7)
+
+    def test_update_parameters(self):
+        # test example from coursera deeplearning.ai
+        np.random.seed(1)
+        W1 = np.random.randn(2, 3)
+        b1 = np.random.randn(2, 1)
+        W2 = np.random.randn(3, 3)
+        b2 = np.random.randn(3, 1)
+        dW1 = np.random.randn(2, 3)
+        db1 = np.random.randn(2, 1)
+        dW2 = np.random.randn(3, 3)
+        db2 = np.random.randn(3, 1)
+
+        parameters = {"W1": W1, "b1": b1, "W2": W2, "b2": b2}
+        grads = {"dW1": dW1, "db1": db1, "dW2": dW2, "db2": db2}
+        l1 = layer.Layer((3, 1), (2, 1))
+        l1.W = W1
+        l1.b = b1
+        l1.dW = dW1
+        l1.db = db1
+        l2 = layer.Layer((3, 1), (3, 1))
+        l2.W = W2
+        l2.b = b2
+        l2.dW = dW2
+        l2.db = db2
+        l1.update_parameters(0.01, 2)
+        l2.update_parameters(0.01, 2)
+        self.assertAlmostEqual(l1.W[0, 0], 1.63178673)
+        self.assertAlmostEqual(l2.sb[0, 0], 5.49507194e-05)
+        self.assertAlmostEqual(l1.b[1, 0], -0.75376553)
