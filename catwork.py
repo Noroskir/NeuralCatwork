@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import h5py
 
 from layer import Layer
-from conv_layer import ConvLayer
+from new_conv_layer import ConvLayer
 from pool_layer import PoolLayer
 
 
@@ -16,6 +16,15 @@ with h5py.File("data/train_catvnoncat.h5", "r") as f:
 with h5py.File("data/test_catvnoncat.h5", "r") as f:
     X_test = np.array(f["test_set_x"])/255
     Y_test = np.array(f["test_set_y"])
+
+X_train = np.zeros((X.shape[0], X.shape[-1], X.shape[1], X.shape[2]))
+for i in range(X.shape[0]):
+    for c in range(X.shape[-1]):
+        X_train[i, c] = train_X[i, :, :, c]
+
+
+plt.imshow(X_train[0, 2])
+plt.show()
 
 
 def compute_cost(AL, Y):
