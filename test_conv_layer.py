@@ -16,7 +16,7 @@ class TestConvLayer(unittest.TestCase):
         l1 = conv_layer.ConvLayer(im.shape, 3, 8, 2, 1, activation='relu')
         l1.W = F
         l1.b = b
-        Z = l1.forward(im)
+        Z = l1.conv_forward(im)
         self.assertAlmostEqual(Z[3, 2, 1, 4], 8.25132576, places=8)
 
     def test_backward_propagation(self):
