@@ -55,6 +55,7 @@ class PoolLayer:
         Returns:
             np.array: derivative of intput values
         """
+        self.dX[:, :, :, :] = 0
         m, n_h, n_w, n_c = self.out_shape
         for i in range(m):
             for h in range(n_h):
