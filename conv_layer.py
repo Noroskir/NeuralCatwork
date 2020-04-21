@@ -1,4 +1,5 @@
 import numpy as np
+from opt_einsum import contract
 
 
 class ConvLayer:
@@ -30,7 +31,7 @@ class ConvLayer:
     def __init_weights(self, f, c, in_shape):
         """Initialise parameters He initialisation."""
         return np.random.randn(f, f, in_shape[-1], c) \
-            * np.sqrt(2/(in_shape[0]*in_shape[1]*in_shape[-1]))
+            * np.sqrt(2/(in_shape[1]*in_shape[2]))
 
     def _relu(self, z):
         """ReLu activation function
@@ -75,7 +76,7 @@ class ConvLayer:
                    strides[-2]*self.stride, strides[-1])
         M = np.lib.stride_tricks.as_strided(
             x_pad, shape=shape, strides=strides, writeable=False)
-        self.Z = np.einsum('pqrs,pqrtbmn->tbms', self.W, M)
+        self.Z = contract('pqrs,pqrtbmn->tbms', self.W, M)
         self.Z = self.Z + self.b
         if self.activation == 'relu':
             return self._relu(self.Z)
@@ -115,7 +116,7 @@ class ConvLayer:
 
         return self.dX
 
-    def backward(self, dZ):
+    def backward(self, dA):
         """Numpy einsum and stride tricks backward propagation implementation.
         Args:
             dA (np.array): gradient of output values
@@ -123,6 +124,7 @@ class ConvLayer:
             np.array: dX gradient of input values
 
             """
+        dZ = dA * self._deriv_relu(self.Z)
         self.dW[:, :, :, :] = 0
         self.db[:, :, :, :] = 0
         (m, n_H_prev, n_W_prev, n_C_prev) = self.X.shape
@@ -157,7 +159,7 @@ class ConvLayer:
                    input.strides[2])
         M = np.lib.stride_tricks.as_strided(
             input, shape=shape, strides=strides, writeable=False,)
-        self.dX = np.einsum('pqrs,bmnspq->bmnr', W_rot, M)
+        self.dX = contract('pqrs,bmnspq->bmnr', W_rot, M)
 
         del dZ_pad
 
@@ -170,10 +172,10 @@ class ConvLayer:
 
         M = np.lib.stride_tricks.as_strided(
             X_pad, shape=shape_Z, strides=strides_Z, writeable=False)
-        self.dW = np.einsum('abcd,pqsabc->pqsd', dZ, M)
+        self.dW = contract('abcd,pqsabc->pqsd', dZ, M)
         assert(self.dW.shape == self.W.shape)
 
-        self.db = np.einsum('abcd->d', dZ).reshape(1, 1, 1, n_C)
+        self.db = contract('abcd->d', dZ).reshape(1, 1, 1, n_C)
 
         return self.dX
 

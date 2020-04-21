@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import h5py
 
 from layer import Layer
-from new_conv_layer import ConvLayer
+from conv_layer import ConvLayer
 from pool_layer import PoolLayer
 
 
@@ -60,6 +60,7 @@ def train_network(X, Y, rate, iterations):
         dA = dA.reshape(l2.out_shape)
         dA = l2.backward(dA)
         dA = l1.backward(dA)
+        print(l1.dW[:, :, 0, 0])
         l1.update_parameters(rate, t)
         l2.update_parameters(rate, t)
         l3.update_parameters(rate, t)
