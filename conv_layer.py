@@ -3,22 +3,23 @@ from opt_einsum import contract
 
 
 class ConvLayer:
-    def __init__(self, in_shape, f, c, stride, pad, activation='relu'):
+    def __init__(self, dim_in, f, c, stride, pad, activation='relu', lamb=0.0):
         """Initialise the convolutional layer of the neural network.
         """
-        self.in_shape = in_shape
-        self.out_shape = (in_shape[0],
-                          1+int((in_shape[1]-f + 2*pad)/stride),
-                          1+int((in_shape[2]-f + 2*pad)/stride),
-                          c)
+        self.dim_in = dim_in
+        self.dim_out = (dim_in[0],
+                        1+int((dim_in[1]-f + 2*pad)/stride),
+                        1+int((dim_in[2]-f + 2*pad)/stride),
+                        c)
         self.f = f
         self.n_c = c
         self.stride = stride
         self.pad = pad
         self.activation = activation
-        self.X = np.zeros(in_shape)
-        self.Z = np.zeros(self.out_shape)
-        self.W = self.__init_weights(f, c, in_shape)
+        self.lamb = lamb
+        self.X = np.zeros(dim_in)
+        self.Z = np.zeros(self.dim_out)
+        self.W = self.__init_weights(f, c, dim_in)
         self.b = np.zeros((1, 1, 1, c))
         self.dX = np.zeros(self.X.shape)
         self.dW = np.zeros(self.W.shape)
@@ -28,10 +29,10 @@ class ConvLayer:
         self.sW = np.zeros(self.W.shape)
         self.sb = np.zeros(self.b.shape)
 
-    def __init_weights(self, f, c, in_shape):
+    def __init_weights(self, f, c, dim_in):
         """Initialise parameters He initialisation."""
-        return np.random.randn(f, f, in_shape[-1], c) \
-            * np.sqrt(2/(in_shape[1]*in_shape[2]))
+        return np.random.randn(f, f, dim_in[-1], c) \
+            * np.sqrt(2/(dim_in[1]*dim_in[2]))
 
     def _relu(self, z):
         """ReLu activation function
@@ -54,7 +55,7 @@ class ConvLayer:
     def forward(self, X):
         """Forward propagation
         Args:
-            x (np.array): array of dimension in_shape (m, n_h_p, n_w_p, n_c_p)
+            x (np.array): array of dimension dim_in (m, n_h_p, n_w_p, n_c_p)
         Returns:
             np.array: output.
         """
@@ -70,7 +71,7 @@ class ConvLayer:
             x_pad = X
 
         # compute Z for multiple input images and multiple filters
-        shape = (self.f, self.f, self.in_shape[-1], X.shape[0], n_h, n_w, 1)
+        shape = (self.f, self.f, self.dim_in[-1], X.shape[0], n_h, n_w, 1)
         strides = (x_pad.strides * 2)[1:]
         strides = (*strides[:-3], strides[-3]*self.stride,
                    strides[-2]*self.stride, strides[-1])
@@ -114,6 +115,8 @@ class ConvLayer:
         self.dX[:, :, :, :] = dx_pad[:, self.pad:-
                                      self.pad, self.pad:-self.pad, :]
 
+        self.dW += self.lamb/self.dim_in[0]*self.W
+
         return self.dX
 
     def backward(self, dA):
@@ -122,9 +125,12 @@ class ConvLayer:
             dA (np.array): gradient of output values
         Returns:
             np.array: dX gradient of input values
-
-            """
-        dZ = dA * self._deriv_relu(self.Z)
+        """
+        if len(dA.shape) == 2:
+            dZ = dA.reshape(dA.shape[1], *self.dim_out[1:]
+                            ) * self._deriv_relu(self.Z)
+        else:
+            dZ = dA * self._deriv_relu(self.Z)
         self.dW[:, :, :, :] = 0
         self.db[:, :, :, :] = 0
         (m, n_H_prev, n_W_prev, n_C_prev) = self.X.shape
@@ -173,7 +179,7 @@ class ConvLayer:
         M = np.lib.stride_tricks.as_strided(
             X_pad, shape=shape_Z, strides=strides_Z, writeable=False)
         self.dW = contract('abcd,pqsabc->pqsd', dZ, M)
-        assert(self.dW.shape == self.W.shape)
+        self.dW += self.lamb/self.dim_in[0]*self.W
 
         self.db = contract('abcd->d', dZ).reshape(1, 1, 1, n_C)
 

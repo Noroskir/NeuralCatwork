@@ -16,7 +16,7 @@ class Layer:
         self.lamb = lamb
         self.X = np.zeros(dim_in)
         self.Z = np.zeros(dim_out)
-        self.W = self._init_weights(dim_in[0], dim_out[0])
+        self.W = self._init_weights(dim_in, dim_out)
         self.b = np.zeros((dim_out[0], 1))
         self.dW = np.zeros(self.W.shape)
         self.db = np.zeros(self.b.shape)
@@ -33,7 +33,7 @@ class Layer:
         Returns:
             np.array: initialised weights
         """
-        W = np.random.randn(dim_out, dim_in) * np.sqrt(2/dim_in)
+        W = np.random.randn(dim_out[0], dim_in[0]) * np.sqrt(2/dim_in[0])
         return W
 
     def _relu(self, z):
@@ -79,8 +79,11 @@ class Layer:
         Returns:
             np.array: array of the output layer
         """
-        self.X = x.copy()
-        self.Z = np.dot(self.W, x) + self.b
+        if len(x.shape) > 2:
+            self.X = x.reshape(x.shape[0], -1).T
+        else:
+            self.X = x.copy()
+        self.Z = np.dot(self.W, self.X) + self.b
         if self.activation == 'relu':
             A = self._relu(self.Z)
         elif self.activation == 'sigmoid':
@@ -94,7 +97,7 @@ class Layer:
         Returns:
             np.array: dX
         """
-        m = self.dim_out[1]
+        m = dA.shape[1]
         if self.activation == 'relu':
             dZ = dA * self._deriv_relu(self.Z)
         elif self.activation == 'sigmoid':
