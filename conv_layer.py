@@ -28,6 +28,7 @@ class ConvLayer:
         self.vb = np.zeros(self.b.shape)
         self.sW = np.zeros(self.W.shape)
         self.sb = np.zeros(self.b.shape)
+        self.dZ_pad = self._allocate_dZ_pad(dim_in[0])
 
     def __init_weights(self, f, c, dim_in):
         """Initialise parameters He initialisation."""
@@ -51,6 +52,15 @@ class ConvLayer:
             np.array: derivative at z.
         """
         return np.float64(z > 0)
+
+    def _allocate_dZ_pad(self, m):
+        """Allocate memory for the padded dZ values for 
+        the transposed convolution in the backpropagation."""
+        in_h = self.X.shape[1] + (self.W.shape[0]-1)
+        in_w = self.X.shape[2] + (self.W.shape[0]-1)
+        dZ_pad = np.zeros((m, in_h,
+                           in_w, self.Z.shape[-1]))
+        return dZ_pad
 
     def forward(self, X):
         """Forward propagation
@@ -131,6 +141,8 @@ class ConvLayer:
                             ) * self._deriv_relu(self.Z)
         else:
             dZ = dA * self._deriv_relu(self.Z)
+        if dZ.shape[0] != self.dZ_pad.shape[0]:
+            self.dZ_pad = self._allocate_dZ_pad(dZ.shape[0])
         self.dW[:, :, :, :] = 0
         self.db[:, :, :, :] = 0
         (m, n_H_prev, n_W_prev, n_C_prev) = self.X.shape
@@ -138,36 +150,29 @@ class ConvLayer:
         stride = self.stride
         pad = self.pad
         (m, n_H, n_W, n_C) = dZ.shape
-        pad_dZ = f-(pad+1)
-        in_h = self.X.shape[1] + (f-1)
-        in_w = self.X.shape[2] + (f-1)
         W_rot = np.rot90(self.W, 2)
-
-        dZ_pad = np.zeros((dZ.shape[0], in_h, in_w, dZ.shape[-1]))
+        pad_dZ = self.W.shape[0]-(self.pad+1)
         if pad_dZ == 0:
-            dZ_pad[:, 0::stride, 0::stride] = dZ
+            self.dZ_pad[:, 0::stride, 0::stride] = dZ
         else:
-            dZ_pad[:, pad_dZ:-pad_dZ:stride, pad_dZ:-pad_dZ:stride, :] = dZ
+            self.dZ_pad[:, pad_dZ:-pad_dZ:stride,
+                        pad_dZ:-pad_dZ:stride, :] = dZ
 
-        input = dZ_pad[:, :, :, :]
-        kernel = W_rot[:, :, :, :]
-        shape = (input.shape[0],                        # m
-                 input.shape[1] - kernel.shape[0] + 1,  # X_nx
-                 input.shape[2] - kernel.shape[1] + 1,  # X_ny
-                 input.shape[3],                        # dZ_nc
-                 kernel.shape[0],                       # f
-                 kernel.shape[1])                       # f
-        strides = (input.strides[0],
-                   input.strides[1],
-                   input.strides[2],
-                   input.strides[3],
-                   input.strides[1],
-                   input.strides[2])
+        shape = (self.dZ_pad.shape[0],                       # m
+                 self.dZ_pad.shape[1] - W_rot.shape[0] + 1,  # X_nx
+                 self.dZ_pad.shape[2] - W_rot.shape[1] + 1,  # X_ny
+                 self.dZ_pad.shape[3],                       # dZ_nc
+                 W_rot.shape[0],                             # f
+                 W_rot.shape[1])                             # f
+        strides = (self.dZ_pad.strides[0],
+                   self.dZ_pad.strides[1],
+                   self.dZ_pad.strides[2],
+                   self.dZ_pad.strides[3],
+                   self.dZ_pad.strides[1],
+                   self.dZ_pad.strides[2])
         M = np.lib.stride_tricks.as_strided(
-            input, shape=shape, strides=strides, writeable=False,)
+            self.dZ_pad, shape=shape, strides=strides, writeable=False,)
         self.dX = contract('pqrs,bmnspq->bmnr', W_rot, M)
-
-        del dZ_pad
 
         X_pad = np.pad(self.X, ((0, 0), (pad, pad), (pad, pad), (0, 0)), mode='constant',
                        constant_values=(0, 0))

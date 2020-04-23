@@ -1,12 +1,13 @@
 import numpy as np
+from opt_einsum import contract
 
 
 class Layer:
     def __init__(self, dim_in, dim_out, activation='relu', lamb=0.0):
         """Initialise layer of the neural network.
         Args:
-            dim_in (tuple): (n_x, m) dimension of the input
-            dim_out (tuple): (n_x, m) dimension of the output
+            dim_in (int): n_x dimension of the input nodes
+            dim_out (int): n_x dimension of the output nodes
             activation (str): activation function, 'relu' or 'sigmoid'
             lamb (float): L2 regularisation parameter 0 == no regularisation
         """
@@ -14,10 +15,8 @@ class Layer:
         self.dim_out = dim_out
         self.activation = activation
         self.lamb = lamb
-        self.X = np.zeros(dim_in)
-        self.Z = np.zeros(dim_out)
         self.W = self._init_weights(dim_in, dim_out)
-        self.b = np.zeros((dim_out[0], 1))
+        self.b = np.zeros((dim_out, 1))
         self.dW = np.zeros(self.W.shape)
         self.db = np.zeros(self.b.shape)
         self.vW = np.zeros(self.W.shape)
@@ -28,12 +27,12 @@ class Layer:
     def _init_weights(self, dim_in, dim_out):
         """Initialise parameters with He initialisation.
         Args:
-            dim_in (float): dimension of intput layer
-            dim_out (float): dimension of output layer
+            dim_in (int): dimension of intput layer
+            dim_out (int): dimension of output layer
         Returns:
             np.array: initialised weights
         """
-        W = np.random.randn(dim_out[0], dim_in[0]) * np.sqrt(2/dim_in[0])
+        W = np.random.randn(dim_out, dim_in) * np.sqrt(2/dim_in)
         return W
 
     def _relu(self, z):
@@ -102,9 +101,11 @@ class Layer:
             dZ = dA * self._deriv_relu(self.Z)
         elif self.activation == 'sigmoid':
             dZ = dA * self._deriv_sigmoid(self.Z)
-        self.dW = 1/m * np.dot(dZ, self.X.T) + self.lamb / m*self.W
+        # self.dW = 1/m * np.dot(dZ, self.X.T) + self.lamb / m*self.W
+        self.dW = 1/m * contract('ij,kj->ik', dZ, self.X) + self.lamb/m*self.W
         self.db = 1/m * np.sum(dZ, axis=1, keepdims=True)
-        dX = np.dot(self.W.T, dZ)
+        # dX = np.dot(self.W.T, dZ)
+        dX = contract('ji,jk->ik', self.W, dZ)
         return dX
 
     def update_parameters(self, rate, t, beta1=0.9, beta2=0.999, epsilon=1e-8):

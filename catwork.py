@@ -8,17 +8,8 @@ from pool_layer import PoolLayer
 
 
 class NeuralNetwork:
-    def __init__(self):
-        self.layers = []
-
-    def add_layer(self, layer):
-        """Add a layer to the network.
-        Args:
-            layer (Layer): layer of the NN
-        Returns:
-            None
-        """
-        self.layers.append(layer)
+    def __init__(self, layers):
+        self.layers = layers
 
     def create_mini_batches(self, X, Y, size):
         """Create mini batches from the input data."""
@@ -53,8 +44,6 @@ class NeuralNetwork:
         """
         m = AL.shape[1]
         L2 = 0
-        print(AL)
-        print(Y)
         for l in self.layers:
             L2 += lamb/m/2*np.sum(np.square(l.W))
         cost = -1/m * np.sum(Y*np.log(AL) + (1-Y)*np.log(1-AL)) + L2
@@ -71,24 +60,37 @@ class NeuralNetwork:
         m = AL.shape[1]
         return - 1 / m * (Y/AL - (1-Y)/(1-AL))
 
-    def train_network(self, X, Y, rate, epochs, lamb=0.1):
-        cost = []
-        t = 1
-        mini_batches = self.create_mini_batches(X, Y, size=32)
-        for i in range(epochs):
-            costSum = 0
-            for mX, mY in mini_batches:
-                for l in self.layers:
-                    mX = l.forward(mX)
-                costSum += self.compute_cost(mX, mY, lamb=lamb)
-                dA = self.deriv_cost(mX, mY)
-                for l in reversed(self.layers):
-                    dA = l.backward(dA)
-                    l.update_parameters(rate, t)
-                t += 1
-            cost.append(costSum)
-            print("Cost of epoch {:}: {:.5f}".format(i, cost[-1]))
-        return cost
+    def predict_testset(self, X, Y):
+        """Predict the result of input X and compare to labels y.
+        Args:
+            X (np.array): input testset (m, nx, ny, nc)
+            y (np.array): true output
+        Returns:
+            Accuracy.
+        """
+        m = Y.shape[1]
+        for l in self.layers:
+            X = l.forward(X)
+        pred = np.float32(X > 0.5)
+        a = np.sum(pred == Y)/m
+        print("Accuracy on test set: {:.2f}".format(a))
+        return pred
+
+    def predict(self, X, classes):
+        """Predict the result for a single input and plots the image.
+        Args:
+            X (np.array): input (nx, ny, nc)
+            classes (dict): labels
+        Returns:
+            None.
+        """
+        prob = np.array(X).reshape(1, 64, 64, 3)
+        for l in self.layers:
+            prob = l.forward(prob)
+        pred = (prob > 0.5)[0, 0]
+        plt.imshow(X)
+        plt.title("{:} with prop: {:.3f}".format(classes[pred], prob[0, 0]))
+        plt.show()
 
     def save_network(self, filename):
         """Save the trained layers of the network."""
@@ -97,14 +99,36 @@ class NeuralNetwork:
 
     def load_network(self, filename):
         """Load trained layers from file."""
-        filehandler = open(filename, 'r')
+        filehandler = open(filename, 'rb')
         self.layers = pickle.load(filehandler)
+
+    def train_network(self, X, Y, rate, epochs, lamb=0.1):
+        cost = []
+        t = 1
+        mini_batches = self.create_mini_batches(X, Y, size=209)
+        for i in range(epochs):
+            costSum = 0
+            for mX, mY in mini_batches:
+                for l in self.layers:
+                    mX = l.forward(mX)
+                print(self.layers[3].W)
+                costSum += self.compute_cost(mX, mY, lamb=lamb)
+                dA = self.deriv_cost(mX, mY)
+                for l in reversed(self.layers):
+                    dA = l.backward(dA)
+                    l.update_parameters(rate, t)
+                t += 1
+            cost.append(costSum)
+            print("Cost of epoch {:}: {:.5f}".format(i, cost[-1]))
+            if i % 100 == 0:
+                self.predict_testset(X_test, Y_test)
+        return cost
 
 
 with h5py.File("data/train_catvnoncat.h5", "r") as f:
     X = np.array(f["train_set_x"][:])
     Y = np.array(f["train_set_y"][:])
-    classes = np.array(f["list_classes"])
+    classes = list(f["list_classes"])
     train_X = X/225
     train_Y = Y.reshape(Y.shape[0], -1).T
 with h5py.File("data/test_catvnoncat.h5", "r") as f:
@@ -112,44 +136,45 @@ with h5py.File("data/test_catvnoncat.h5", "r") as f:
     Y_test = np.array(f["test_set_y"])
     Y_test = Y_test.reshape(Y_test.shape[0], -1).T
 
-
-def compute_cost(AL, Y, layers, lamb):
-    """Compute cost with L2 regularisation."""
-    m = Y.shape[0]
-    L2 = 0
-    for l in layers:
-        L2 += lamb/m/2*np.sum(np.square(l.W))
-    cost = -1/m * np.sum(Y*np.log(AL) + (1-Y)*np.log(1-AL)) + L2
-    return np.squeeze(cost)
-
-
 print("Shape training set X:", train_X.shape)
 print("Shape training set Y:", train_Y.shape)
 
 m = train_X.shape[0]
 batch_size = 209
-in_1 = (batch_size, *train_X.shape[1:])
-lamb = 0.01
+dim_in = (batch_size, *train_X.shape[1:])
+lamb = 0.0000
 
-nn = NeuralNetwork()
-# nn.add_layer(ConvLayer(in_1, 3, 8, 1, 1, activation='relu', lamb=lamb))
-# nn.add_layer(ConvLayer(nn.layers[0].dim_out,
-#                        5, 16, 1, 0, activation='relu', lamb=lamb))
-# in_3 = (nn.layers[1].dim_out[1]*nn.layers[1].dim_out[2]
-#         * nn.layers[1].dim_out[3], nn.layers[1].dim_out[0])
-#nn.add_layer(Layer(in_3, (16, batch_size), activation='relu', lamb=lamb))
+# l1 = ConvLayer(dim_in, f=3, c=8, stride=1, pad=1, activation='relu', lamb=lamb)
+# l2 = ConvLayer(l1.dim_out, f=5, c=16, stride=2,
+#                pad=0, activation='relu', lamb=lamb)
+# dim_in3 = l2.dim_out[1]*l2.dim_out[2]*l2.dim_out[3]
+# l3 = Layer(dim_in3, 100, activation='relu', lamb=lamb)
+# l4 = Layer(l3.dim_out, 32, activation='relu', lamb=lamb)
+# l5 = Layer(l4.dim_out, 16, activation='relu', lamb=lamb)
+# l6 = Layer(l5.dim_out, 1, activation='sigmoid', lamb=lamb)
 
-nn.add_layer(Layer((64*64*3, batch_size), (128, batch_size),
-                   activation='relu', lamb=lamb))
-nn.add_layer(Layer(nn.layers[0].dim_out,
-                   (64, batch_size), activation='relu', lamb=lamb))
-nn.add_layer(Layer(nn.layers[1].dim_out,
-                   (32, batch_size), activation='relu', lamb=lamb))
-nn.add_layer(Layer(nn.layers[2].dim_out, (8, batch_size),
-                   activation='sigmoid', lamb=lamb))
+# nn = NeuralNetwork((l1, l2, l3, l4, l5, l6))
 
-cost = nn.train_network(train_X, train_Y, rate=0.0075, epochs=3000, lamb=0)
-nn.save_network('catwork.obj')
+# cost = nn.train_network(train_X, train_Y, rate=0.02, epochs=200, lamb=lamb)
+# nn.save_network('catwork2.obj')
+# nn.load_network('catwork.obj')
 
-plt.plot(np.arange(len(cost)), cost)
-plt.show()
+l0 = ConvLayer((209, 64, 64, 3), 3, 4, 1, 1, activation='relu', lamb=lamb)
+dim_out = l0.dim_out[1]*l0.dim_out[2]*l0.dim_out[3]
+print(dim_out)
+l1 = Layer(dim_out, 20, activation='relu', lamb=lamb)
+l2 = Layer(l1.dim_out, 7, activation='relu', lamb=lamb)
+l3 = Layer(l2.dim_out, 5, activation='relu', lamb=lamb)
+l4 = Layer(l3.dim_out, 1, activation='sigmoid', lamb=lamb)
+
+nn = NeuralNetwork((l0, l1, l2, l3, l4))
+
+cost = nn.train_network(train_X, train_Y, rate=0.005, epochs=500, lamb=0.01)
+
+nn.predict_testset(X_test, Y_test)
+nn.predict_testset(train_X, train_Y)
+# for i in range(X_test.shape[0]):
+#     nn.predict(X_test[i], classes)
+
+# plt.plot(np.arange(len(cost)), cost)
+# plt.show()
