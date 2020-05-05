@@ -1,9 +1,9 @@
-import numpy as np
-from opt_einsum import contract
+#import numpy as np
+import cupy as np
 
 
 class ConvLayer:
-    def __init__(self, dim_in, f, c, stride, pad, activation='relu', lamb=0.0):
+    def __init__(self, dim_in, f, c, stride, pad, activation='relu'):
         """Initialise the convolutional layer of the neural network.
         """
         self.dim_in = dim_in
@@ -16,12 +16,14 @@ class ConvLayer:
         self.stride = stride
         self.pad = pad
         self.activation = activation
-        self.lamb = lamb
-        self.X = np.zeros(dim_in)
+        self.lamb = 0
+        self.X_pad = np.pad(np.zeros(dim_in), ((0, 0), (pad, pad),
+                                               (pad, pad), (0, 0)),
+                            mode='constant', constant_values=(0, 0))
         self.Z = np.zeros(self.dim_out)
         self.W = self.__init_weights(f, c, dim_in)
         self.b = np.zeros((1, 1, 1, c))
-        self.dX = np.zeros(self.X.shape)
+        self.dX = np.zeros(dim_in)
         self.dW = np.zeros(self.W.shape)
         self.db = np.zeros(self.b.shape)
         self.vW = np.zeros(self.W.shape)
@@ -51,13 +53,13 @@ class ConvLayer:
         Returns:
             np.array: derivative at z.
         """
-        return np.float64(z > 0)
+        return (z > 0).astype(np.float32)
 
     def _allocate_dZ_pad(self, m):
-        """Allocate memory for the padded dZ values for 
+        """Allocate memory for the padded dZ values for
         the transposed convolution in the backpropagation."""
-        in_h = self.X.shape[1] + (self.W.shape[0]-1)
-        in_w = self.X.shape[2] + (self.W.shape[0]-1)
+        in_h = self.dim_in[1] + (self.W.shape[0]-1)
+        in_w = self.dim_in[2] + (self.W.shape[0]-1)
         dZ_pad = np.zeros((m, in_h,
                            in_w, self.Z.shape[-1]))
         return dZ_pad
@@ -69,25 +71,28 @@ class ConvLayer:
         Returns:
             np.array: output.
         """
-        self.X = X.copy()
         n_h = int((X.shape[1] - self.f + 2*self.pad) / self.stride) + 1
         n_w = int((X.shape[2] - self.f + 2*self.pad) / self.stride) + 1
 
+        if X.shape != self.dim_in:
+            self.X_pad = np.pad(np.zeros(X.shape), ((0, 0), (self.pad, self.pad),
+                                                    (self.pad, self.pad), (0, 0)),
+                                mode='constant', constant_values=(0, 0))
         if self.pad != 0:
-            x_pad = np.pad(X, ((0, 0), (self.pad, self.pad),
-                               (self.pad, self.pad), (0, 0)),
-                           mode='constant', constant_values=(0, 0))
+            self.X_pad[:, self.pad:-self.pad, self.pad:-self.pad, :] = X
         else:
-            x_pad = X
+            self.X_pad = X
 
         # compute Z for multiple input images and multiple filters
         shape = (self.f, self.f, self.dim_in[-1], X.shape[0], n_h, n_w, 1)
-        strides = (x_pad.strides * 2)[1:]
+        strides = (self.X_pad.strides * 2)[1:]
         strides = (*strides[:-3], strides[-3]*self.stride,
                    strides[-2]*self.stride, strides[-1])
         M = np.lib.stride_tricks.as_strided(
-            x_pad, shape=shape, strides=strides, writeable=False)
-        self.Z = contract('pqrs,pqrtbmn->tbms', self.W, M)
+            self.X_pad, shape=shape, strides=strides)  # , writeable=False)
+        self.Z = np.tensordot(M, self.W, axes=(
+            [0, 1, 2], [0, 1, 2]))[:, :, :, 0, :]
+        #self.Z = np.einsum('pqrs,pqrtbmn->tbms', self.W, M, optimize='optimal')
         self.Z = self.Z + self.b
         if self.activation == 'relu':
             return self._relu(self.Z)
@@ -104,8 +109,6 @@ class ConvLayer:
         self.dW[:, :, :, :] = 0
         self.db[:, :, :, :] = 0
         (m, n_h, n_w, n_c) = dA.shape
-        x_pad = np.pad(self.X, ((0, 0), (self.pad, self.pad), (self.pad, self.pad),
-                                (0, 0)), mode='constant', constant_values=(0, 0))
         dx_pad = np.pad(self.dX, ((0, 0), (self.pad, self.pad), (self.pad, self.pad),
                                   (0, 0)), mode='constant', constant_values=(0, 0))
         dZ = dA * self._deriv_relu(self.Z)
@@ -118,7 +121,7 @@ class ConvLayer:
                 for c in range(n_c):
                     dx_pad[:, v_s:v_e, h_s:h_e, :] += self.W[:, :, :, c] \
                         * dZ[:, h, w, c].reshape(dZ.shape[0], 1, 1, 1)
-                    self.dW[:, :, :, c] += np.sum(x_pad[:, v_s:v_e, h_s:h_e]
+                    self.dW[:, :, :, c] += np.sum(self.X_pad[:, v_s:v_e, h_s:h_e]
                                                   * dZ[:, h, w, c].reshape(dZ.shape[0], 1, 1, 1),
                                                   axis=0)
                     self.db[:, :, :, c] += np.sum(dZ[:, h, w, c])
@@ -130,7 +133,7 @@ class ConvLayer:
         return self.dX
 
     def backward(self, dA):
-        """Numpy einsum and stride tricks backward propagation implementation.
+        """Using numpy stride tricks for the backward propagation implementation.
         Args:
             dA (np.array): gradient of output values
         Returns:
@@ -145,10 +148,9 @@ class ConvLayer:
             self.dZ_pad = self._allocate_dZ_pad(dZ.shape[0])
         self.dW[:, :, :, :] = 0
         self.db[:, :, :, :] = 0
-        (m, n_H_prev, n_W_prev, n_C_prev) = self.X.shape
+        (m, n_H_prev, n_W_prev, n_C_prev) = self.dim_in
         (f, f, n_C_prev, n_C) = self.W.shape
         stride = self.stride
-        pad = self.pad
         (m, n_H, n_W, n_C) = dZ.shape
         W_rot = np.rot90(self.W, 2)
         pad_dZ = self.W.shape[0]-(self.pad+1)
@@ -171,22 +173,24 @@ class ConvLayer:
                    self.dZ_pad.strides[1],
                    self.dZ_pad.strides[2])
         M = np.lib.stride_tricks.as_strided(
-            self.dZ_pad, shape=shape, strides=strides, writeable=False,)
-        self.dX = contract('pqrs,bmnspq->bmnr', W_rot, M)
+            self.dZ_pad, shape=shape, strides=strides)  # , writeable=False,)
+        self.dX = np.tensordot(M, W_rot, axes=(
+            (4, 5, 3), (0, 1, 3)))
+        #self.dX = np.einsum('pqrs,bmnspq->bmnr', W_rot, M)
 
-        X_pad = np.pad(self.X, ((0, 0), (pad, pad), (pad, pad), (0, 0)), mode='constant',
-                       constant_values=(0, 0))
         shape_Z = (f, f, n_C_prev, m, n_H, n_W)
-        strides_Z = (X_pad.strides)[1:] + (X_pad.strides)[0:3]
+        strides_Z = (self.X_pad.strides)[1:] + (self.X_pad.strides)[0:3]
         strides_Z = (*strides_Z[:-2], strides_Z[-2]
                      * stride, strides_Z[-1]*stride)
 
         M = np.lib.stride_tricks.as_strided(
-            X_pad, shape=shape_Z, strides=strides_Z, writeable=False)
-        self.dW = contract('abcd,pqsabc->pqsd', dZ, M)
+            self.X_pad, shape=shape_Z, strides=strides_Z)  # , writeable=False)
+        # self.dW = np.einsum('abcd,pqsabc->pqsd', dZ, M)
+        self.dW = np.tensordot(M, dZ, axes=((3, 4, 5), (0, 1, 2)))
         self.dW += self.lamb/self.dim_in[0]*self.W
 
-        self.db = contract('abcd->d', dZ).reshape(1, 1, 1, n_C)
+        # self.db = np.einsum('abcd->d', dZ).reshape(1, 1, 1, n_C)
+        self.db = np.sum(dZ, axis=(0, 1, 2)).reshape(1, 1, 1, n_C)
 
         return self.dX
 

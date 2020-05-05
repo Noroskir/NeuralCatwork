@@ -1,20 +1,22 @@
-import numpy as np
-from opt_einsum import contract
+import cupy as np
+# import numpy as np
 
 
-class FullyConnectedLayer:
-    def __init__(self, dim_in, dim_out, activation='relu', lamb=0.0):
+class FCLayer:
+    def __init__(self, dim_in, dim_out, activation='relu'):
         """Initialise layer of the neural network.
         Args:
-            dim_in (int): n_x dimension of the input nodes
+            dim_in (int): dimension of the input nodes (n_x, m) or (m, n_h, n_w, c)
             dim_out (int): n_x dimension of the output nodes
             activation (str): activation function, 'relu' or 'sigmoid'
             lamb (float): L2 regularisation parameter 0 == no regularisation
         """
+        if type(dim_in) != int:
+            dim_in = dim_in[1]*dim_in[2]*dim_in[3]
         self.dim_in = dim_in
         self.dim_out = dim_out
         self.activation = activation
-        self.lamb = lamb
+        self.lamb = 0
         self.W = self._init_weights(dim_in, dim_out)
         self.b = np.zeros((dim_out, 1))
         self.dW = np.zeros(self.W.shape)
@@ -51,7 +53,7 @@ class FullyConnectedLayer:
         Returns:
             np.array: derivative at z.
         """
-        return np.float64(z > 0)
+        return (z > 0).astype(np.float32)
 
     def _sigmoid(self, z):
         """Sigmoid activation function
@@ -101,11 +103,11 @@ class FullyConnectedLayer:
             dZ = dA * self._deriv_relu(self.Z)
         elif self.activation == 'sigmoid':
             dZ = dA * self._deriv_sigmoid(self.Z)
-        # self.dW = 1/m * np.dot(dZ, self.X.T) + self.lamb / m*self.W
-        self.dW = 1/m * contract('ij,kj->ik', dZ, self.X) + self.lamb/m*self.W
+        self.dW = 1/m * np.dot(dZ, self.X.T) + self.lamb / m*self.W
+        # self.dW = 1/m * contract('ij,kj->ik', dZ, self.X) + self.lamb/m*self.W
         self.db = 1/m * np.sum(dZ, axis=1, keepdims=True)
-        # dX = np.dot(self.W.T, dZ)
-        dX = contract('ji,jk->ik', self.W, dZ)
+        dX = np.dot(self.W.T, dZ)
+        # dX = contract('ji,jk->ik', self.W, dZ)
         return dX
 
     def update_parameters(self, rate, t, beta1=0.9, beta2=0.999, epsilon=1e-8):
